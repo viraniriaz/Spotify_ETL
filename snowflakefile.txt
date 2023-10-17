@@ -1,0 +1,128 @@
+CREATE or REPLACE STORAGE INTEGRATION my_gcs_integration
+  TYPE = EXTERNAL_STAGE
+  STORAGE_PROVIDER = GCS
+  ENABLED = TRUE
+  STORAGE_ALLOWED_LOCATIONS = ('gcs://data_from_spotify/');
+
+DESC INTEGRATION my_gcs_integration
+
+create or REPLACE  stage MY_GCP
+URL = 'gcs://data_from_spotify/'
+STORAGE_INTEGRATION = my_gcs_integration  
+
+LIST @MY_GCP;
+
+CREATE OR REPLACE TABLE tblalbum (
+    album_id STRING,
+    album_name STRING,
+    album_release_date DATE,
+    album_total_tracks INT,
+    album_url STRING
+);
+
+-- Define a file format for CSV files
+CREATE OR REPLACE FILE FORMAT readcsv
+  TYPE = 'CSV'
+  SKIP_HEADER = 1
+  SKIP_BLANK_LINES = TRUE
+  ERROR_ON_COLUMN_COUNT_MISMATCH = TRUE
+  COMPRESSION = 'AUTO'
+  RECORD_DELIMITER = '\n'
+  FIELD_DELIMITER = ',';
+
+CREATE OR REPLACE TABLE tblalbum (
+    album_id STRING,
+    album_name STRING,
+    album_release_date DATE,
+    album_total_tracks INT,
+    album_url STRING
+);
+-- Load data from the GCS folder into a Snowflake table
+COPY INTO tblalbum
+FROM @MY_GCP/transformed/album_data/
+FILE_FORMAT = (FORMAT_NAME = readcsv);
+
+select count(*) from tblalbum;
+
+
+-- Create a table in Snowflake
+CREATE OR REPLACE TABLE tblartist (
+    artist_id STRING,
+    artist_name STRING,
+    external_url STRING
+);
+
+COPY INTO tblartist
+FROM @MY_GCP/transformed/artist_data/
+FILE_FORMAT = (FORMAT_NAME = readcsv);
+
+select count(artist_id) from tblartist;
+
+CREATE OR REPLACE TABLE tblsongs (
+    song_id STRING,
+    song_name STRING,
+    song_duration INT,
+    song_url STRING,
+    song_popularity INT,
+    album_id INT,
+    artist_id INT
+);
+
+COPY INTO tblsongs
+FROM @MY_GCP/transformed/song_data/
+FILE_FORMAT = (FORMAT_NAME = readcsv);
+
+select count(song_id) from tblsongs;
+
+create or replace schema pipes;
+
+create or replace pipe for_spotify_gcp.pipes.album_pipe 
+auto_ingest=TRUE
+as
+COPY INTO tblalbum
+FROM @MY_GCP/transformed/album_data/
+FILE_FORMAT = (FORMAT_NAME = readcsv);
+
+select count(*) from tblalbum
+
+desc pipe album_pipe
+
+
+CREATE or replace NOTIFICATION INTEGRATION my_notification_int
+  TYPE = QUEUE
+  NOTIFICATION_PROVIDER = GCP_PUBSUB
+  ENABLED = true
+  GCP_PUBSUB_SUBSCRIPTION_NAME = 'projects/customer-370616/subscriptions/snowpipr_sub';
+
+DESC NOTIFICATION INTEGRATION my_notification_int;
+
+
+create or replace pipe album_pipe
+auto_ingest=TRUE
+integration=my_notification_int
+as
+COPY INTO tblalbum
+FROM @MY_GCP/transformed/album_data/
+FILE_FORMAT = (FORMAT_NAME = readcsv);
+
+show pipes
+
+select count(*) from tblalbum;
+
+
+create or replace pipe artist_pipe
+auto_ingest=TRUE
+integration=my_notification_int
+as
+COPY INTO tblartist
+FROM @MY_GCP/transformed/artist_data/
+FILE_FORMAT = (FORMAT_NAME = readcsv);
+
+
+create or replace pipe song_pipe
+auto_ingest=TRUE
+integration=my_notification_int
+as
+COPY INTO tblsongs
+FROM @MY_GCP/transformed/song_data/
+FILE_FORMAT = (FORMAT_NAME = readcsv);
